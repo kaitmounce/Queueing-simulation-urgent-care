@@ -33,23 +33,33 @@ LogInterval = 1/60;
 %[text] W\_q = rho/(mu-lambda) = 0.667/(3-2) = 0.667
 %[text] ## Numbers from theory for M/M/1 queue
 %[text] Compute `P(1+n)` = $P\_n$ = probability of finding the system in state $n$ in the long term. Note that this calculation assumes $s=1$.
-rho = lambda / mu;
-P0 = 1 - rho;
-nMax = 10;
-P = zeros([1, nMax+1]);
+theta = 4;
+
+P0 = 1/hypergeom([1], [mu/theta], lambda/theta);
+
+NMax = 10;
+P = zeros(NMax+1,1);
 P(1) = P0;
 
-for n = 0:nMax
-    P(1+n) = P0 * rho^n;
-    P(1+n)
+for j = 1:NMax
+    P(1+j) = P(j) * lambda / (mu + (j-1)*theta);
 end
 
-L = rho/(1-rho)
-Lq = rho^2/(1-rho)
-W = 1/(mu-lambda)
-Wq = rho/(mu-lambda)
+P0toPS = P(1:6)
+
+
+n = (0:NMax)';
+
+L = (P0 .* P);
+Lq = sum(max(P0 - 1, 0) .* P);
 
 pi_s = mu*(1-P0)/lambda
+
+lambda_eff = lambda * pi_s; 
+
+W = L / lambda_eff;
+Wq = Lq / lambda_eff;
+
 
 %%
 %[text] ## Run simulation samples
@@ -66,11 +76,14 @@ for SampleNum = 1:NumSamples
     if mod(SampleNum, 100) == 0
         fprintf("\n");
     end
-    q = ServiceQueue( ...
+    q = ServiceQueueRenege( ...
         ArrivalRate=lambda, ...
         DepartureRate=mu, ...
         NumServers=s, ...
+        RenegeRate=theta, ...
         LogInterval=LogInterval);
+
+
     q.schedule_event(Arrival(random(q.InterArrivalDist), Customer(1)));
     run_until(q, MaxTime);
     QSamples{SampleNum} = q;
@@ -119,7 +132,7 @@ hold(ax, "on");
 %[text] Start with a histogram.  The result is an empirical PDF, that is, the area of the bar at horizontal index n is proportional to the fraction of samples for which there were n customers in the system.  The data for this histogram is counts of customers, which must all be whole numbers.  The option `BinMethod="integers"` means to use bins $(-0.5, 0.5), (0.5, 1.5), \\dots$ so that the height of the first bar is proportional to the count of 0s in the data, the height of the second bar is proportional to the count of 1s, etc. MATLAB can choose bins automatically, but since we know the data consists of whole numbers, it makes sense to specify this option so we get consistent results.
 h = histogram(ax, NumInSystem, Normalization="probability", BinMethod="integers");
 %[text] Plot $(0, P\_0), (1, P\_1), \\dots$.  If all goes well, these dots should land close to the tops of the bars of the histogram.
-plot(ax, 0:nMax, P, 'o', MarkerEdgeColor='k', MarkerFaceColor='r');
+plot(ax, 0:NMax, P, 'o', MarkerEdgeColor='k', MarkerFaceColor='r');
 %[text] Add titles and labels and such.
 title(ax, "Number of customers in the system");
 xlabel(ax, "Count");
@@ -149,7 +162,7 @@ for SampleNum = 1:NumSamples
 end
 %[text] ### Print out mean number waiting in the system ($L\_q$)
 NumWaitingSamples = vertcat(NumWaitingSamples{:});
-meanNumWaitingSamples = mean(NumWaitingSamples);
+meanNumInWaitingSamples = mean(NumWaitingSamples);
 fprintf("Mean number waiting in system: %f\n", meanNumWaitingSamples);
 %[text] ## Collect measurements of how long customers spend in the system
 %[text] This is a rather different calculation because instead of looking at log entries for each sample `ServiceQueue`, we'll look at the list of served  customers in each sample `ServiceQueue`.
@@ -176,12 +189,13 @@ for SampleNum = 1:NumSamples
         cellfun(@(c) c.DepartureTime - c.ArrivalTime, q.Served');
 end
 
-%[text] ### Print out mean time waiting in the system ($W$)
+%[text] ### Print out mean number waiting in the system ($W$)
 TimeInSystemSamples = vertcat(TimeInSystemSamples{:});
 meanTimeInSystemSamples = mean(TimeInSystemSamples);
 fprintf("Mean time in system: %f\n", meanTimeInSystemSamples);
 %[text] ### 
 %[text] ### Use a for Loop - Solving for $W\_q$
+%[text] Note: Ask about q.Served 
 WaitingInSystemSamples = cell([NumSamples, 1]);
 for SampleNum = 1:NumSamples
     q = QSamples{SampleNum};
@@ -206,7 +220,7 @@ end
 
 %[text] ### Print out mean waiting time in the system ($W\_q$)
 WaitingInSystemSamples = vertcat(WaitingInSystemSamples{:});
-meanWaitingInSystemSamples = mean(WaitingInSystemSamples);
+meanTimeInSystemSamples = mean(WaitingInSystemSamples);
 fprintf("Mean waiting time in system: %f\n", meanWaitingInSystemSamples);
 %[text] ### 
 %[text] ### Option two: Use `cellfun` twice.
@@ -241,111 +255,88 @@ pause(2);
 exportgraphics(fig, PictureFolder + filesep + "Time in system histogram.pdf");
 exportgraphics(fig, PictureFolder + filesep + "Time in system histogram.svg");
 
+%[text] ### 
+%[text] ### 2.4. Scenario: Urgent Care with Reneging - Histogram
+% Simulated Pn 
+fig = figure();
+ax = axes(fig);
 
-%[text] ### 2.2. Scenario: Urgent Care Baseline - Histograms
+histogram(ax, WaitingInSystemSamples, ...
+Normalization="probability", ...
+BinWidth=5/60);
 
-LSamples = zeros(NumSamples,1);
-LqSamples = zeros(NumSamples,1);
-WSamples = zeros(NumSamples,1);
-WqSamples = zeros(NumSamples,1);
+title(ax, "Time customers spend waiting");
+xlabel(ax, "Waiting time, hours");
+ylabel(ax, "Probability");
+
+exportgraphics(fig, PictureFolder + filesep + "Waiting time histogram.pdf");
+exportgraphics(fig, PictureFolder + filesep + "Waiting time histogram.svg");
+
+%% Service time histogram
+ServiceTimeSamples = cell([NumSamples, 1]);
 
 for SampleNum = 1:NumSamples
 q = QSamples{SampleNum};
 
-% L
-pShift = q.Log.NumWaiting + q.Log.NumInService;
-LSamples(SampleNum) = mean(pShift);
-
-% Lq
-LqSamples(SampleNum) = mean(q.Log.NumWaiting);
-
-% W and Wq
-if ~isempty(q.Served)
-
-TimeInSystemShift = cellfun(@(c) ...
-c.DepartureTime - c.ArrivalTime, q.Served');
-
-WaitingTimeShift = cellfun(@(c) ...
-c.BeginServiceTime - c.ArrivalTime, q.Served');
-
-WSamples(SampleNum) = mean(TimeInSystemShift);
-WqSamples(SampleNum) = mean(WaitingTimeShift);
-
-end
+ServiceTimeSamples{SampleNum} = ...
+cellfun(@(c) c.DepartureTime - c.BeginServiceTime, q.Served');
 end
 
-
-
-% the count of patients in the system (L)
+ServiceTimeSamples = vertcat(ServiceTimeSamples{:});
 fig = figure();
-histogram(LSamples, Normalization="probability");
-title("Histogram of the Number of Patients in the System");
-xlabel("Average Number in System");
-ylabel("Probability");
+ax = axes(fig);
 
-% Save L Histogram 
-exportgraphics(fig, PictureFolder + filesep + "Number in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Number in system histogram updated.svg");
+histogram(ax, ServiceTimeSamples, ...
+Normalization="probability", ...
+BinWidth=5/60);
 
-% the count of patients waiting (Lq)
+title(ax, "Time customers spend being served");
+xlabel(ax, "Service time, hours");
+ylabel(ax, "Probability");
+
+exportgraphics(fig, PictureFolder + filesep + "Service time histogram.pdf");
+exportgraphics(fig, PictureFolder + filesep + "Service time histogram.svg");
+
+%% Customers served histogram
+
+ServedCounts = cellfun(@(q) length(q.Served), QSamples);
+
 fig = figure();
-histogram(LqSamples, Normalization="probability");
-title("Histogram of the Number of Patients Waiting");
-xlabel("Average Number Waiting");
-ylabel("Probability");
+ax = axes(fig);
 
-% Save Lq Histogram
-exportgraphics(fig, PictureFolder + filesep + "Number waiting in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Number waiting in system histogram updated.svg");
+histogram(ax, ServedCounts, ...
+Normalization="probability", ...
+BinMethod="integers");
 
-% the total time patients spend in the system (W)
+title(ax, "Customers served per shift");
+xlabel(ax, "Count served");
+ylabel(ax, "Probability");
+
+exportgraphics(fig, PictureFolder + filesep + "Served count histogram.pdf");
+exportgraphics(fig, PictureFolder + filesep + "Served count histogram.svg");
+
+%% Customers reneged histogram
+
+RenegedCounts = cellfun(@(q) length(q.Reneged), QSamples);
+
 fig = figure();
-histogram(WSamples, Normalization="probability");
-title("Histogram of the Total Time Patients Spend in the System");
-xlabel("Average Time in System (hours)");
-ylabel("Probability");
+ax = axes(fig);
 
-% Save W Histogram
-exportgraphics(fig, PictureFolder + filesep + "Total time in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Total time in system histogram updated.svg");
+histogram(ax, RenegedCounts, ...
+Normalization="probability", ...
+BinMethod="integers");
 
-% the time customers spend waiting in the queue (Wq)
-fig = figure();
-histogram(WqSamples, Normalization="probability");
-title("Histogram of the Time Patients Spend Waiting in the Queue");
-xlabel("Average Waiting Time (hours)");
-ylabel("Probability");
+title(ax, "Customers reneged per shift");
+xlabel(ax, "Count reneged");
+ylabel(ax, "Probability");
 
-% Save Wq Histogram
-exportgraphics(fig, PictureFolder + filesep + "Time waiting in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Time waiting in system histogram updated.svg");
+exportgraphics(fig, PictureFolder + filesep + "Reneged count histogram.pdf");
+exportgraphics(fig, PictureFolder + filesep + "Reneged count histogram.svg");
 
-% the time customers spend being served (W-Wq)
-fig = figure();
-histogram((WSamples - WqSamples), Normalization="probability");
-title("Histogram of the Time Patients Spend Being Served");
-xlabel("Average Served Time (hours)");
-ylabel("Probability");
-
-% Save time served Histogram
-exportgraphics(fig, PictureFolder + filesep + "Time served in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Time served in system histogram updated.svg");
-
-% the number of customers being served (L-Lq)
-fig = figure();
-histogram((LSamples - LqSamples), Normalization="probability");
-title("Histogram of the Number of Patients Being Served");
-xlabel("Average Number Served");
-ylabel("Probability");
-
-% Save number served
-exportgraphics(fig, PictureFolder + filesep + "Number served in system histogram updated.pdf");
-exportgraphics(fig, PictureFolder + filesep + "Number served in system histogram updated.svg");
-
-%[text] ### 
+%[text] 
 
 %[appendix]{"version":"1.0"}
 %---
 %[metadata:view]
-%   data: {"layout":"onright","rightPanelPercent":38.2}
+%   data: {"layout":"onright","rightPanelPercent":28.3}
 %---

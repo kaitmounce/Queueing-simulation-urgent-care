@@ -1,4 +1,4 @@
-classdef ServiceQueue < handle
+classdef ServiceQueueRenege < handle
     % ServiceQueue Simulation object that keeps track of customer arrivals,
     % departures, and service.
     % The default properties are for time measured in hours.
@@ -26,6 +26,8 @@ classdef ServiceQueue < handle
         % interval.
         % The default is 1/60 of an hour (1 minute)
         LogInterval = 1/60;
+
+        RenegeRate = 0
     
     end
 
@@ -42,6 +44,8 @@ classdef ServiceQueue < handle
         % station begins serving a customer.  The resulting random number
         % is the time until service is complete.
         ServiceDist;
+
+        RenegeDist;
 
         % ServerAvailable - Row vector of boolean values, initial all true.
         % ServerAvailable(j) is set to false when serving station j begins
@@ -72,22 +76,26 @@ classdef ServiceQueue < handle
         % object is moved from its slot in Servers to the end of Served.
         Served = {};
 
+        % Reneged - Cell array row vector of Customer objects. Initially
+        % empty.
+        Reneged = {};
+
         % Log - Table of log entries. Its columns are:
         % * Time - Time of the log entry
         % * NumWaiting - How many customers are currently waiting
         % * NumInService - How many are currently being served
         % * NumServed -  How many have been served
-        Log = table(Size=[0, 4], ...
+        Log = table(Size=[0, 5], ...
             VariableNames=...
-            {'Time', 'NumWaiting', 'NumInService', 'NumServed'}, ...
+            {'Time', 'NumWaiting', 'NumInService', 'NumServed', 'NumReneged'}, ...
             VariableTypes=...
-            {'double', 'int64', 'int64', 'int64'});
+            {'double', 'int64', 'int64', 'int64', 'int64'});
     
     end
 
     methods
 
-        function obj = ServiceQueue(KWArgs)
+        function obj = ServiceQueueRenege(KWArgs)
             % ServiceQueue Constructor. Public properties can be specified
             % as named arguments.
 
@@ -97,7 +105,7 @@ classdef ServiceQueue < handle
             arguments
                 % Special syntax declaring that the allowed named arguments
                 % should match the public properties of class ServiceQueue.
-                KWArgs.?ServiceQueue;
+                KWArgs.?ServiceQueueRenege;
             end
 
             % Since this method is a constructor, the obj output variable
@@ -113,27 +121,20 @@ classdef ServiceQueue < handle
             end
 
             % Initialize the private properties of this instance.
+           
             obj.InterArrivalDist = ...
                 makedist("Exponential", mu=1/obj.ArrivalRate);
 
-            serviceMean = 1/obj.DepartureRate; % Average service time
-
-            serviceShape = 2; % Shape parameter
-
-            serviceScale = serviceMean / serviceShape; % Scale parameter
-
-            obj.ServiceDist = ...
-                makedist("Gamma", a = serviceShape, b = serviceScale);
-            
-%{
-
             obj.ServiceDist = ...
                 makedist("Exponential", mu=1/obj.DepartureRate);
-%}
-
            
+            obj.RenegeDist = ...
+            makedist("Exponential", mu=1/obj.RenegeRate);
+            
             obj.ServerAvailable = repelem(true, obj.NumServers);
+            
             obj.Servers = cell([1, obj.NumServers]);
+           
             % Events has to be initialized in the constructor.
             obj.Events = PriorityQueue({}, @(x) x.Time);
 
@@ -198,6 +199,9 @@ classdef ServiceQueue < handle
             % The Customer is appended to the list of waiting customers.
             obj.Waiting{end+1} = c;
 
+            %Schedule the reneging event
+            schedule_event(obj, Renege(c.Id, (obj.Time + random(obj.RenegeDist)))); 
+
             % Construct the next Customer that will arrive.
             % Its Id is one higher than the one that just arrived.
             next_customer = Customer(c.Id + 1);
@@ -242,6 +246,23 @@ classdef ServiceQueue < handle
             % Check to see if any customers can advance.
             advance(obj);
         end
+
+        function handle_renege(obj, renege)
+            % handle_renege Handle a renege event.
+           % If a patient is still waiting, remove them from the queue
+           % Record patient as reneged
+
+           for k = 1:length(obj.Waiting)
+               customer = obj.Waiting{k};
+
+               if customer.Id == renege.Id
+                   obj.Reneged{end+1} = customer;
+                   obj.Waiting(k) = [];
+                   break;
+               end
+           end
+        end
+
 
         function begin_serving(obj, j, customer)
             % begin_serving Begin serving the given customer at station j.
@@ -327,9 +348,10 @@ classdef ServiceQueue < handle
             NumWaiting = length(obj.Waiting);
             NumInService = obj.NumServers - sum(obj.ServerAvailable);
             NumServed = length(obj.Served);
+            NumReneged = length(obj.Reneged);
 
             % MATLAB-ism: This is how to add a row to the end of a table.
-            obj.Log(end+1, :) = {obj.Time, NumWaiting, NumInService, NumServed};
+            obj.Log(end+1, :) = {obj.Time, NumWaiting, NumInService, NumServed, NumReneged};
         end
     end
 end
